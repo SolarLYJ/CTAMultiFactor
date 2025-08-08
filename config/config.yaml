@@ -1,0 +1,44 @@
+# 路径
+data_path: data/sample_data.pkl
+result_path: results/
+
+preprocess:
+  nan_threshold:   0.1      # 缺失率>10% 的因子直接剔除
+  winsor_pct:      0.01     # 1%–99% Winsorize
+  fill_method:   median_cs     # 可选 median_cs / ts_ffill
+  smooth_window:   20        # 对单品种时间序列做 rolling mean；<=1 表示不平滑
+  cs_zscore:       true     # 是否做横截面 z-score 标准化
+
+# 因子
+analysis:
+  top_k_plot: 6          # 画分层净值曲线的因子个数
+  ic_min_obs: 30         # 计算单日 IC 至少需要的样本数
+
+# 训练窗口
+train_start: 2018-01-01
+train_end: 2023-12-31
+test_start: 2024-01-01
+test_end: 2025-12-31
+
+# 特征筛选
+ic_threshold: 0.02          # |mean IC| 下限
+corr_threshold: 0.95        # 相关系数上限
+top_k_factor_ic: 300        # 先按 |IC| 取前 K
+
+# 降维
+dim_reduction:               # 关闭 => method: none
+  method: pca                # [none | pca | fa | ica | ae]
+  n_components: 50           # 降到多少维
+  random_state: 42           # ICA / AE 可用
+
+# 建模
+model_name: lgb
+hyper_params:
+  n_estimators: 1000
+  learning_rate: 0.05
+  max_depth: -1
+
+# 回测
+k_long: 0.2
+k_short: 0.2
+transaction_cost: 0.0003
