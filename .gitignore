@@ -1,0 +1,14 @@
+# data
+/data/**/*.pkl
+!/data/.gitkeep
+
+# prompt
+/prompt.md
+
+# entire directories
+/results/
+!/results/.gitkeep
+
+# python cache
+**/__pycache__/
+*.py[cod]
