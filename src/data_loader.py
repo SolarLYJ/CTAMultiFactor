@@ -1,9 +1,22 @@
 import pickle
 from pathlib import Path
 import pandas as pd
+import yaml
 
-def load_raw(path: str | Path) -> dict[str, pd.DataFrame]:
-    """读取原始 pkl，返回 {symbol: DataFrame}"""
+def read_cfg(path: str) -> dict:
+    """读取 YAML，并将日期字段全部转成 pd.Timestamp"""
+    with open(path, encoding="utf-8") as f:
+        cfg = yaml.safe_load(f)
+
+    date_keys = ("train_start", "train_end", "test_start", "test_end")
+    for k in date_keys:
+        if k in cfg and not isinstance(cfg[k], pd.Timestamp):
+            cfg[k] = pd.to_datetime(cfg[k])
+
+    return cfg
+
+def load_pkl(path: str | Path):
+    """读取原始 pkl"""
     with open(path, "rb") as f:
         data = pickle.load(f)
     return data
@@ -31,6 +44,6 @@ def get_return(df: pd.DataFrame) -> pd.Series:
     return ret
 
 if __name__ == "__main__":
-    raw = load_raw("../data/sample_data.pkl")
+    raw = load_pkl("../data/sample_data.pkl")
     merged = concat_symbols(raw)
     print(merged.shape, merged.head())

@@ -7,11 +7,10 @@ src/preprocess.py
 • 缺失率过滤
 • Winsorize 去极值
 • 时间序列平滑
-• 缺失值填补 :  median_cs | ts_ffill
+• 缺失值填补 :  ts_ffill | median_cs
 • 横截面 z-score 标准化（可选）
 ============================================================
 """
-from __future__ import annotations
 import numpy as np
 import pandas as pd
 from scipy.stats.mstats import winsorize
@@ -19,7 +18,7 @@ from scipy.stats.mstats import winsorize
 
 # -----------------------------------------------------------------
 def winsorize_col(s: pd.Series, pct: float) -> pd.Series:
-    """对单列做 winsorize，保持 NaN 位置不变"""
+    """对单列做 winsorize"""
     if s.isna().all():
         return s
     arr = winsorize(s.to_numpy(), limits=[pct, pct])
@@ -33,12 +32,12 @@ def cs_zscore_transform(df: pd.DataFrame) -> pd.DataFrame:
     return (df - cs_mean) / cs_std
 
 
-def ts_smooth(df: pd.DataFrame, window: int) -> pd.DataFrame:
+def ts_smooth(df: pd.DataFrame, window: int, min_periods: int) -> pd.DataFrame:
     """按 symbol × factor 做滚动均值平滑"""
     if window <= 1:
         return df
     tmp = df.unstack()                      # -> date × symbol × factor
-    smoothed = tmp.rolling(window, min_periods=1).mean()
+    smoothed = tmp.rolling(window, min_periods).mean()
     return smoothed.stack().reindex_like(df)
 
 
@@ -58,15 +57,12 @@ def clean_factor_df(
     df: pd.DataFrame,
     nan_threshold: float = 0.2,
     winsor_pct: float = 0.01,
-    fill_method: str = "median_cs",   # median_cs | ts_ffill
-    smooth_window: int = 1,
+    fill_method: str = "ts_ffill",
+    smooth_window: int = 10,
+    min_periods=10,
     cs_zscore: bool = True,
-    verbose: bool = True
 ) -> pd.DataFrame:
     """
-    原始因子清洗主入口
-    Parameters
-    ----------
     df : DataFrame(index=[date,symbol], columns=factors)
     """
     out = df.copy()
@@ -77,7 +73,7 @@ def clean_factor_df(
     # 2. 缺失率过滤
     nan_ratio = out.isna().mean()
     drop_cols = nan_ratio[nan_ratio > nan_threshold].index
-    if len(drop_cols) and verbose:
+    if len(drop_cols):
         print(f"[Pre] drop {len(drop_cols)} cols (nan_ratio > {nan_threshold:.0%})")
     out.drop(columns=drop_cols, inplace=True)
 
@@ -86,7 +82,7 @@ def clean_factor_df(
         out[c] = winsorize_col(out[c], winsor_pct)
 
     # 4. 时间序列平滑
-    out = ts_smooth(out, smooth_window)
+    out = ts_smooth(out, smooth_window,min_periods)
 
     # 5. 填补缺失
     if fill_method == "median_cs":

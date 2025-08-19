@@ -1,7 +1,6 @@
 """
 长/短多空回测 + 绩效统计 & 净值曲线绘制
 """
-from __future__ import annotations
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -38,43 +37,43 @@ def long_short_pnl(pred: pd.DataFrame,
 
 
 # ------------------------------------------------------------
-def perf_stats(daily_ret: pd.Series, freq: int = 252) -> dict:
-    """
-    计算常用指标：总收益、年化、夏普、卡玛、最大回撤
-    """
-    nav = (1 + daily_ret).cumprod()
+def perf_stats(ret: pd.Series, ann: int = 252):
+    r = ret.mean() * ann
+    v = ret.std(ddof=0) * (ann**0.5)
+    sharpe = r / v if v else np.nan
+    mdd = (ret.add(1).cumprod().cummax() - ret.add(1).cumprod()).max()
+    return {"AnnRet": r, "Vol": v, "Sharpe": sharpe, "MDD": mdd}
 
-    ann_ret = nav.iloc[-1] ** (freq / len(nav)) - 1
-    ann_vol = daily_ret.std() * np.sqrt(freq)
-    sharpe  = ann_ret / ann_vol if ann_vol else np.nan
+def split_stats(ret: pd.Series, split_date: str) -> pd.DataFrame:
 
-    rolling_max = nav.cummax()
-    drawdown    = nav / rolling_max - 1
-    max_dd      = drawdown.min()
+    ins = ret.loc[:split_date]
+    oos = ret.loc[split_date:]
+    all_data = ret
 
-    calmar = ann_ret / abs(max_dd) if max_dd else np.nan
+    stats_is = perf_stats(ins)
+    stats_oos = perf_stats(oos)
+    stats_all = perf_stats(all_data)
 
-    return dict(
-        total_return = nav.iloc[-1] - 1,
-        annual_return = ann_ret,
-        annual_vol = ann_vol,
-        sharpe = sharpe,
-        max_drawdown = max_dd,
-        calmar = calmar
-    )
+    stats_df = pd.DataFrame({
+        "IS": stats_is,    # 样本内指标
+        "OOS": stats_oos,  # 样本外指标
+        "ALL": stats_all   # 全样本指标
+    })
+
+    return stats_df
 
 
 # ------------------------------------------------------------
-def plot_nav(daily_ret: pd.Series, path: Path | str):
-    """
-    保存净值曲线 PNG
-    """
-    nav = (1 + daily_ret).cumprod()
-    plt.figure(figsize=(10, 4))
-    nav.plot()
-    plt.title("Net Asset Value Curve")
-    plt.ylabel("NAV")
-    plt.grid(True, linestyle="--", alpha=.4)
+def plot_nav(nav: pd.Series, path: Path,
+             title: str = "", split_date: str | None = None):
+    fig, ax = plt.subplots(figsize=(10, 4))
+    ax.plot(nav, label="NAV")
+    if split_date is not None:
+        ax.axvline(pd.to_datetime(split_date), ls="--", c="k", alpha=.5)
+        ax.text(pd.to_datetime(split_date), ax.get_ylim()[1],
+                "  OOS", va="top", ha="left")
+    ax.set_title(title)
+    ax.legend()
     plt.tight_layout()
-    plt.savefig(path, dpi=150)
-    plt.close()
+    fig.savefig(path, dpi=150)
+    plt.close(fig)

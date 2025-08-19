@@ -2,7 +2,8 @@
 step-1  因子清洗 + Rank-IC + 分层回测
 ------------------------------------
 输出：
-clean_X.parquet     # 清洗后的 (date,symbol)×factor
+clean_X.pkl     # 清洗后的 (date,symbol)×factor
+ret_y.pkl     #  (date,symbol)×ret
 ic_matrix.csv
 ic_stats.csv
 top_factor_list.txt # |meanIC| Top-K 名单
@@ -18,57 +19,59 @@ from pathlib import Path
 import yaml, pandas as pd
 from tqdm import tqdm
 
-from data_loader import load_raw, concat_symbols, get_return
+from data_loader import load_pkl, concat_symbols, get_return, read_cfg
 from feature_engineering import pipeline_feature_eng
 from preprocess import clean_factor_df
-from factor_evaluation import compute_ic_matrix, ic_summary, layer_spread, plot_nav
+from factor_evaluation import compute_ic_matrix, ic_summary, layer_spread, top_k_uncorrelated
+from backtest import plot_nav
 import warnings
 warnings.filterwarnings("ignore", category=FutureWarning)
 
-def read_cfg(p):
-    with open(p, encoding="utf-8") as f:
-        return yaml.safe_load(f)
+cfg_path="config/config.yaml"
+cfg = read_cfg(cfg_path)
+out = Path(cfg["result_path"])
+out.mkdir(exist_ok=True)
+layer_dir = out / "layer_test"
 
-def main(cfg_path="config/config.yaml"):
-    cfg = read_cfg(cfg_path)
-    out = Path(cfg["result_path"]); out.mkdir(exist_ok=True, parents=True)
-    layer_dir = out / "layer_test"
+# ---------- 1. load & clean ----------
+print("="*10+"loading + cleaning"+"="*10)
+raw = concat_symbols(load_pkl(cfg["data_path"]))
+raw = pipeline_feature_eng(raw)
+mask = raw.columns.get_level_values(1).str.startswith(("f", "ff"))
+X = raw.loc[:, mask].stack(level=0)
+X.index.names = ["date", "symbol"]
+X = clean_factor_df(X, **cfg["preprocess"])
+X.to_pickle(out / "clean_X.pkl")
 
-    # ---------- 1. load & clean ----------
-    print("📥  loading + cleaning ...")
-    raw = concat_symbols(load_raw(cfg["data_path"]))
-    raw = pipeline_feature_eng(raw)
-    mask = raw.columns.get_level_values(1).str.startswith(("f", "ff"))
-    X = raw.loc[:, mask].stack(level=0); X.index.names = ["date", "symbol"]
-    X = clean_factor_df(X, **cfg["preprocess"])
-    X.to_parquet(out / "clean_X.parquet")       # ⭐ 保存
+y = get_return(raw).stack(dropna=False)
+y.index.names = ["date", "symbol"]
+y.to_pickle(out / "ret_y.pkl")
 
-    y = get_return(raw).stack(dropna=False); y.index.names = ["date", "symbol"]
+# ---------- 2. Rank-IC ----------
+if (out / "ic_matrix.csv").exists():
+    print("="*10+"ic_matrix.csv already exists, skip calc"+"="*10)
+    ic_mat  = pd.read_csv(out / "ic_matrix.csv", index_col=0, parse_dates=True)
+    ic_stat = pd.read_csv(out / "ic_stats.csv",  index_col=0)
+else:
+    print("="*10+"computing Rank-IC"+"="*10)
+    ic_mat  = compute_ic_matrix(X, y, cfg["analysis"]["ic_min_obs"])
+    ic_mat.to_csv(out / "ic_matrix.csv")
+    ic_stat = ic_summary(ic_mat)
+    ic_stat.to_csv(out / "ic_stats.csv")
+print("="*10+"IC files ready"+"="*10)
 
-    # ---------- 2. Rank-IC ----------
-    if (out / "ic_matrix.csv").exists():
-        print("📝  ic_matrix.csv already exists, skip calc")
-        ic_mat  = pd.read_csv(out / "ic_matrix.csv", index_col=0, parse_dates=True)
-        ic_stat = pd.read_csv(out / "ic_stats.csv",  index_col=0)
-    else:
-        print("📊  computing Rank-IC ...")
-        ic_mat  = compute_ic_matrix(X, y, cfg["analysis"]["ic_min_obs"])
-        ic_mat.to_csv(out / "ic_matrix.csv")
-        ic_stat = ic_summary(ic_mat)
-        ic_stat.to_csv(out / "ic_stats.csv")
-    print("✅  IC files ready")
+# ---------- 3. layer back-test ----------
+top_k = cfg["analysis"]["top_k_factor"]
+n_layer = cfg["analysis"]["n_layer"]
+best  = top_k_uncorrelated(ic_stat["mean_ic"], X, top_k,
+                        cfg["analysis"]["corr_threshold"],cfg['analysis']['ic_threshold'])
+(out / "top_factor_list.txt").write_text("\n".join(best))   # 保存名单
 
-    # ---------- 3. layer back-test ----------
-    top_k = cfg["analysis"]["top_k_plot"]
-    best  = ic_stat["mean_ic"].abs().sort_values(ascending=False).head(top_k).index
-    (out / "top_factor_list.txt").write_text("\n".join(best))   # ⭐ 保存名单
-
-    print(f"🧪  layer test Top-{top_k}")
-    for fac in tqdm(best):
-        mean_ic = ic_stat.loc[fac, "mean_ic"]
-        spread  = layer_spread(X[fac], y, 5, mean_ic)
-        plot_nav(spread, layer_dir / f"{fac}.png",
-                 title=f"{fac} 5-layer LS (meanIC={mean_ic:.3f})")
-
-if __name__ == "__main__":
-    main()
+print("="*10+"layer test Top-{top_k}"+"="*10)
+for fac in tqdm(best[:cfg["analysis"]["top_k_plot"]]):
+    mean_ic = ic_stat.loc[fac, "mean_ic"]
+    ret     = layer_spread(X[fac], y, n_layer, mean_ic) # 分层回测
+    nav = (1 + ret).cumprod()
+    plot_nav(nav, layer_dir / f"{fac}.png",
+            title=f"{fac} {n_layer}-layer LS (meanIC={mean_ic:.3f})",
+            split_date=cfg["train_end"])
